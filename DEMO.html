@@ -1,0 +1,377 @@
+﻿<!DOCTYPE html>
+<html lang="vi">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Ứng dụng Nhận diện Hình ảnh và Tính tiền</title>
+    <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@latest/dist/tf.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@teachablemachine/image@latest/dist/teachablemachine-image.min.js"></script>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            margin: 20px;
+            text-align: center;
+            background-color: #f9f9f9;
+        }
+
+        h1 {
+            color: #333;
+        }
+
+        #webcam-container {
+            margin: 20px auto;
+        }
+
+        #webcam {
+            max-width: 300px;
+            max-height: 300px;
+            border: 2px solid #ddd;
+            border-radius: 5px;
+        }
+
+        #result {
+            margin-top: 20px;
+            font-size: 18px;
+            color: #333;
+        }
+
+        #cart {
+            margin: 20px auto;
+            border: 1px solid #ccc;
+            padding: 15px;
+            max-width: 600px;
+            background-color: #fff;
+            border-radius: 8px;
+        }
+
+        table {
+            border-collapse: collapse;
+            width: 100%;
+            margin-top: 10px;
+        }
+
+        th, td {
+            border: 1px solid #ddd;
+            padding: 10px;
+            text-align: left;
+        }
+
+        th {
+            background-color: #4CAF50;
+            color: white;
+        }
+
+        td button {
+            background-color: #ff4444;
+            color: white;
+            border: none;
+            padding: 5px 10px;
+            cursor: pointer;
+            border-radius: 3px;
+        }
+
+            td button:hover {
+                background-color: #cc0000;
+            }
+
+        #total {
+            font-weight: bold;
+            margin-top: 15px;
+            font-size: 20px;
+            color: #333;
+        }
+
+        .loading {
+            font-style: italic;
+            color: #888;
+        }
+
+        #start-webcam {
+            padding: 10px 20px;
+            font-size: 16px;
+            background-color: #4CAF50;
+            color: white;
+            border: none;
+            border-radius: 5px;
+            cursor: pointer;
+            margin: 10px;
+        }
+
+            #start-webcam:hover {
+                background-color: #45a049;
+            }
+
+        #quantity-input {
+            margin: 10px;
+            padding: 5px;
+            font-size: 16px;
+            width: 60px;
+        }
+
+        #add-to-cart {
+            padding: 5px 10px;
+            font-size: 16px;
+            background-color: #4CAF50;
+            color: white;
+            border: none;
+            border-radius: 5px;
+            cursor: pointer;
+        }
+
+            #add-to-cart:hover {
+                background-color: #45a049;
+            }
+
+            #add-to-cart:disabled {
+                background-color: #cccccc;
+                cursor: not-allowed;
+            }
+    </style>
+</head>
+<body>
+    <h1>Ứng dụng Nhận diện Hình ảnh và Tính tiền</h1>
+    <button id="start-webcam">Bật Webcam</button>
+    <div id="webcam-container">
+        <video id="webcam" autoplay playsinline></video>
+    </div>
+    <div id="result">Hãy bật camera và quét sản phẩm</div>
+    <div id="quantity-section" style="display: none;">
+        <input type="number" id="quantity-input" min="1" value="1" placeholder="Số lượng">
+        <button id="add-to-cart" disabled>Thêm vào giỏ</button>
+    </div>
+    <div id="cart">
+        <h3>Giỏ hàng</h3>
+        <table id="cart-table">
+            <thead>
+                <tr>
+                    <th>Mặt hàng</th>
+                    <th>Giá (VND)</th>
+                    <th>Số lượng</th>
+                    <th>Tổng (VND)</th>
+                    <th>Hành động</th>
+                </tr>
+            </thead>
+            <tbody id="cart-body"></tbody>
+        </table>
+        <div id="total">Tổng tiền: 0 VND</div>
+    </div>
+
+    <script>
+        // URL của mô hình Teachable Machine
+        const URL = "https://teachablemachine.withgoogle.com/models/QnDuaUcxQ/";
+
+        // Giá cố định cho các mặt hàng (đơn vị: VND)
+        const priceList = {
+            'Sữa Đậu Nành Fami': 4000,
+            'Sữa đậu nành NUTI nguyên chất': 10000,
+            'Sữa hạt óc chó ít đường': 13000,
+            'SỮA TIỆT TRÙNG VINAMILK VỊ SOCOLA 180': 15000,
+            'Sữa Tươi Cô Gái Hà Lan': 16000,
+            'Sữa Tươi Nguyên Kem Meadow Fresh': 20000,
+            'Sữa Tươi Thanh Trùng Nguyên Chất Dalatmilk': 14000,
+            'Sữa Tươi Tiệt Trùng TH True Milk': 12000,
+            'Sữa vinamilk ít đường 180ml': 11000,
+            'Sữa vinamilk tiệt trùng hương dâu 180ml': 19000
+
+        };
+
+        let cart = []; // Giỏ hàng
+        let model; // Mô hình Teachable Machine
+        let maxPredictions; // Số lớp tối đa
+        let webcam; // Đối tượng webcam
+        let isDetecting = false; // Trạng thái nhận diện
+        let currentItem = null; // Mặt hàng hiện tại được nhận diện
+
+        // Tải mô hình Teachable Machine
+        async function init() {
+            try {
+                const modelURL = URL + "model.json";
+                const metadataURL = URL + "metadata.json";
+                console.log('Đang tải mô hình từ:', modelURL);
+                document.getElementById('result').textContent = 'Đang tải mô hình...';
+                model = await tmImage.load(modelURL, metadataURL);
+                maxPredictions = model.getTotalClasses();
+
+                // Lấy danh sách nhãn từ metadata
+                const response = await fetch(metadataURL);
+                const metadata = await response.json();
+                const labels = metadata.labels;
+                console.log('Nhãn của mô hình:', labels);
+
+                // Kiểm tra xem nhãn có khớp với priceList không
+                const priceListKeys = Object.keys(priceList);
+                const mismatchedLabels = labels.filter(label => !priceListKeys.some(key => key.toLowerCase() === label.toLowerCase()));
+                if (mismatchedLabels.length > 0) {
+                    console.warn('Một số nhãn không có trong priceList:', mismatchedLabels);
+                    document.getElementById('result').textContent = `Cảnh báo: Nhãn không khớp: ${mismatchedLabels.join(', ')}. Vui lòng kiểm tra console.`;
+                } else {
+                    document.getElementById('result').textContent = 'Hãy bật camera và quét sản phẩm';
+                }
+            } catch (error) {
+                console.error('Lỗi khi tải mô hình:', error.message, error.stack);
+                document.getElementById('result').textContent = 'Lỗi khi tải mô hình. Vui lòng kiểm tra URL hoặc kết nối.';
+            }
+        }
+
+        // Kiểm tra xem trình duyệt có hỗ trợ getUserMedia không
+        function checkWebcamSupport() {
+            if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+                document.getElementById('result').textContent = 'Trình duyệt không hỗ trợ webcam. Vui lòng sử dụng trình duyệt khác.';
+                document.getElementById('start-webcam').disabled = true;
+                return false;
+            }
+            return true;
+        }
+
+        // Khởi động webcam
+        async function startWebcam() {
+            if (!checkWebcamSupport()) return;
+
+            try {
+                console.log('Đang yêu cầu quyền truy cập webcam...');
+                const stream = await navigator.mediaDevices.getUserMedia({
+                    video: { width: 300, height: 300 },
+                    audio: false
+                });
+                const video = document.getElementById('webcam');
+                video.srcObject = stream;
+                video.onloadedmetadata = () => {
+                    video.play();
+                    console.log('Webcam đã khởi động thành công.');
+                    document.getElementById('result').textContent = 'Đang nhận diện sản phẩm...';
+                };
+                webcam = video;
+                document.getElementById('start-webcam').textContent = 'Đang nhận diện...';
+                document.getElementById('start-webcam').disabled = true;
+                isDetecting = true;
+                detectFrame();
+            } catch (error) {
+                console.error('Lỗi khi truy cập webcam:', error.message, error.stack);
+                document.getElementById('result').textContent = 'Lỗi khi truy cập webcam. Vui lòng cấp quyền truy cập webcam hoặc kiểm tra thiết bị.';
+                document.getElementById('start-webcam').textContent = 'Bật Webcam';
+                document.getElementById('start-webcam').disabled = false;
+            }
+        }
+
+        // Nhận diện liên tục từ khung hình webcam
+        async function detectFrame() {
+            if (!isDetecting || !webcam || !model) {
+                console.log('Không thể nhận diện: isDetecting=', isDetecting, 'webcam=', !!webcam, 'model=', !!model);
+                return;
+            }
+
+            try {
+                const prediction = await model.predict(webcam);
+                let topPrediction = null;
+                let maxProbability = 0;
+
+                // Tìm dự đoán có xác suất cao nhất
+                for (let i = 0; i < maxPredictions; i++) {
+                    if (prediction[i].probability > maxProbability) {
+                        maxProbability = prediction[i].probability;
+                        topPrediction = prediction[i].className;
+                    }
+                }
+
+                const resultDiv = document.getElementById('result');
+                const quantitySection = document.getElementById('quantity-section');
+                const addToCartBtn = document.getElementById('add-to-cart');
+                console.log('Dự đoán:', topPrediction, 'Xác suất:', maxProbability);
+
+                if (topPrediction && maxProbability > 0.6) { // Ngưỡng xác suất
+                    const normalizedPrediction = topPrediction.toLowerCase();
+                    currentItem = Object.keys(priceList).find(key => key.toLowerCase() === normalizedPrediction);
+                    console.log('Current Item:', currentItem);
+
+                    if (currentItem) {
+                        resultDiv.textContent = `Kết quả nhận diện: ${currentItem} (Giá: ${priceList[currentItem].toLocaleString()} VND)`;
+                        quantitySection.style.display = 'block';
+                        addToCartBtn.disabled = false;
+                    } else {
+                        resultDiv.textContent = `Nhận diện: ${topPrediction} (Không có trong danh sách giá)`;
+                        quantitySection.style.display = 'none';
+                        addToCartBtn.disabled = true;
+                    }
+                } else {
+                    resultDiv.textContent = `Không thể nhận diện mặt hàng (Xác suất: ${(maxProbability * 100).toFixed(2)}%)`;
+                    quantitySection.style.display = 'none';
+                    addToCartBtn.disabled = true;
+                    currentItem = null;
+                }
+            } catch (error) {
+                console.error('Lỗi khi nhận diện:', error.message, error.stack);
+                document.getElementById('result').textContent = 'Lỗi khi nhận diện. Vui lòng thử lại.';
+                document.getElementById('quantity-section').style.display = 'none';
+                document.getElementById('add-to-cart').disabled = true;
+            }
+
+            // Tiếp tục nhận diện khung hình tiếp theo
+            if (isDetecting) {
+                requestAnimationFrame(detectFrame);
+            }
+        }
+
+        // Thêm mặt hàng vào giỏ với số lượng thủ công
+        function addToCart() {
+            if (!currentItem) {
+                console.log('Không có mặt hàng để thêm vào giỏ.');
+                return;
+            }
+            const quantityInput = document.getElementById('quantity-input');
+            const quantity = parseInt(quantityInput.value);
+            if (isNaN(quantity) || quantity < 1) {
+                alert('Vui lòng nhập số lượng hợp lệ!');
+                return;
+            }
+
+            const existingItem = cart.find(cartItem => cartItem.name === currentItem);
+            if (existingItem) {
+                existingItem.quantity += quantity;
+            } else {
+                cart.push({ name: currentItem, price: priceList[currentItem], quantity: quantity });
+            }
+            updateCart();
+            quantityInput.value = '1'; // Reset input
+        }
+
+        // Xóa mặt hàng khỏi giỏ
+        window.removeFromCart = function (itemName) {
+            cart = cart.filter(cartItem => cartItem.name !== itemName);
+            updateCart();
+        }
+
+        // Cập nhật hiển thị giỏ hàng
+        function updateCart() {
+            const cartBody = document.getElementById('cart-body');
+            cartBody.innerHTML = '';
+            let total = 0;
+
+            cart.forEach(item => {
+                const row = document.createElement('tr');
+                const itemTotal = item.price * item.quantity;
+                total += itemTotal;
+                row.innerHTML = `
+                        <td>${item.name}</td>
+                        <td>${item.price.toLocaleString()}</td>
+                        <td>${item.quantity}</td>
+                        <td>${itemTotal.toLocaleString()}</td>
+                        <td><button onclick="removeFromCart('${item.name}')">Xóa</button></td>
+                    `;
+                cartBody.appendChild(row);
+            });
+
+            document.getElementById('total').textContent = `Tổng tiền: ${total.toLocaleString()} VND`;
+        }
+
+        // Sự kiện bật webcam
+        document.getElementById('start-webcam').addEventListener('click', startWebcam);
+
+        // Sự kiện thêm vào giỏ
+        document.getElementById('add-to-cart').addEventListener('click', addToCart);
+
+        // Tải mô hình khi trang được tải
+        init();
+    </script>
+</body>
+</html>
+
